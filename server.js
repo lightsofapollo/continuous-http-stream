@@ -5,6 +5,7 @@ var Promise = require('promise');
 var EventEmitter = require('events').EventEmitter;
 
 var stat = Promise.denodeify(fs.stat);
+var rangeParser = require('http-range-parse');
 
 /**
 Write the contents of a given file to the target stream staring at
@@ -26,12 +27,11 @@ function readOffsetInto(file, startOffset, maxOffset, target) {
   }).then(function(endOffset) {
     // Current position in the overall stream/file...
     return new Promise(function(accept) {
-      // Don't read bytes that obviously cannot exist.
-      if (startOffset > endOffset) return accept(startOffset);
-      if (maxOffset !== null && maxOffset > endOffset) {
+      if (maxOffset !== null && maxOffset <= endOffset) {
         endOffset = maxOffset;
       }
-
+      // Don't read bytes that obviously cannot exist.
+      if (startOffset > endOffset) return accept(startOffset);
       var reader = fs.createReadStream(file, {
         autoClose: true,
         start: startOffset,
@@ -90,17 +90,48 @@ Server.prototype = {
   },
 
   /**
+  Resolve the byte ranges from the headers.
+
+  @param {Object} headers from request.
+  @return {Object|Null} object with .startOffset/.endOffset values.
+  */
+  resolveOffsets: function(headers) {
+    if (!headers.range) {
+      // Start at the first byte continue until the last byte.
+      return { startOffset: 0, endOffset: null }
+    }
+
+    var parsedRange = rangeParser(headers.range);
+    if (parsedRange.unit !== 'bytes' || parsedRange.ranges) {
+      return null;
+    }
+
+    return {
+      startOffset: parsedRange.first || 0,
+      endOffset: parsedRange.suffix || parsedRange.last || null
+    };
+  },
+
+  /**
   Server the contents for a given path... Note that this is a long lived http
   GET request.
   */
   serve: function(req, res) {
+    var detail = this.paths[req.url];
+    var offsets = this.resolveOffsets(req.headers);
+
+    // If we cannot resolve offsets reply with a format error.
+    if (!offsets) {
+      res.writeHeader(400);
+      return res.end('Invalid range headers.');
+    }
+
+    // At this point the request should resolve...
     res.writeHeader(200);
 
-    var detail = this.paths[req.url];
-
     // Request wide state.
-    var startOffset = 0; // current starting offset.
-    var maxOffset = null;
+    var startOffset = offsets.startOffset; // current starting offset.
+    var maxOffset = offsets.endOffset;
 
     // At most we can have a single read queued.
     var currentRead =
@@ -139,8 +170,7 @@ Server.prototype = {
         res.end();
       });
     });
-  },
-
+  }
 };
 
 module.exports = Server;

@@ -9,7 +9,9 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "http-range-parse": "^1.0.0",
     "promise": "^5.0.0",
+    "range-parser": "^1.0.0",
     "temporary": "0.0.8"
   },
   "devDependencies": {

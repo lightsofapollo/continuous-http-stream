@@ -1,6 +1,7 @@
 suite('server', function() {
   var Handler = require('./server');
   var PassThrough = require('stream').PassThrough;
+  var URL = require('url');
 
   var fs = require('fs');
   var http = require('http');
@@ -58,8 +59,6 @@ suite('server', function() {
         var buffer = '';
         res.on('data', function gotData(data) {
           buffer += data;
-          var one = JSON.stringify(buffer.toString());
-          var two = JSON.stringify(expected.toString())
           if (buffer === expected) {
             res.removeListener('data', gotData);
             handler.close('/xfoo');
@@ -95,6 +94,189 @@ suite('server', function() {
         });
       }).end();
     });
+
+    test('range: between', function(done) {
+      // Create a stream endpoint...
+      var stream = createWriteStream();
+      var chunks = [
+        '1 ',
+        '2 ',
+        '3 ',
+        '4 ',
+        '5 ',
+        '6 ',
+        '7 ',
+        '8 ',
+        '9 '
+      ];
+
+      var expected = [
+        '2 ',
+        '3 ',
+        '4 ',
+        '5 ',
+        '6 ',
+        '7 ',
+        '8',
+      ].join('')
+
+      handler.add('/xfoo', fixture);
+
+      function writeStream() {
+        var chunk = chunks.shift();
+        if (!chunk) return;
+        stream.write(chunk);
+        // Next tick implies here is a write
+        process.nextTick(writeStream);
+      }
+
+      var options = URL.parse(url + '/xfoo');
+      options.headers = {
+        // Note that per rfc7233 byte ranges are inclusive which may not be what
+        // you expected !
+        'Range': 'bytes=2-14'
+      };
+
+      var req = http.get(options);
+
+      // Ensure it can be read out.
+      req.once('response', function(res) {
+        var buffer = '';
+        res.on('data', function gotData(data) {
+          buffer += data;
+          if (buffer === expected) {
+            res.removeListener('data', gotData);
+            handler.close('/xfoo');
+            res.once('end', done);
+          }
+        });
+      });
+      req.end();
+
+      // Kick off the writes to the stream...
+      writeStream();
+    });
+
+    test('range: start no end', function(done) {
+      // Create a stream endpoint...
+      var stream = createWriteStream();
+      var chunks = [
+        '1 ',
+        '2 ',
+        '3 ',
+        '4 ',
+        '5 ',
+        '6 ',
+        '7 ',
+        '8 ',
+        '9 '
+      ];
+
+      var expected = [
+        '2 ',
+        '3 ',
+        '4 ',
+        '5 ',
+        '6 ',
+        '7 ',
+        '8 ',
+        '9 ',
+      ].join('')
+
+      handler.add('/xfoo', fixture);
+
+      function writeStream() {
+        var chunk = chunks.shift();
+        if (!chunk) return;
+        stream.write(chunk);
+        // Next tick implies here is a write
+        process.nextTick(writeStream);
+      }
+
+      var options = URL.parse(url + '/xfoo');
+      options.headers = {
+        // Note that per rfc7233 byte ranges are inclusive which may not be what
+        // you expected !
+        'Range': 'bytes=2-'
+      };
+
+      var req = http.get(options);
+
+      // Ensure it can be read out.
+      req.once('response', function(res) {
+        var buffer = '';
+        res.on('data', function gotData(data) {
+          buffer += data;
+          if (buffer === expected) {
+            res.removeListener('data', gotData);
+            handler.close('/xfoo');
+            res.once('end', done);
+          }
+        });
+      });
+      req.end();
+
+      // Kick off the writes to the stream...
+      writeStream();
+    });
+
+    test('range: end no start', function(done) {
+      // Create a stream endpoint...
+      var stream = createWriteStream();
+      var chunks = [
+        '1 ',
+        '2 ',
+        '3 ',
+        '4 ',
+        '5 ',
+        '6 ',
+        '7 ',
+        '8 ',
+        '9 '
+      ];
+
+      var expected = [
+        '1 '
+      ].join('')
+
+      handler.add('/xfoo', fixture);
+
+      function writeStream() {
+        var chunk = chunks.shift();
+        if (!chunk) return;
+        stream.write(chunk);
+        // Next tick implies here is a write
+        process.nextTick(writeStream);
+      }
+
+      var options = URL.parse(url + '/xfoo');
+      options.headers = {
+        // Note that per rfc7233 byte ranges are inclusive which may not be what
+        // you expected !
+        'Range': 'bytes=-1'
+      };
+
+      var req = http.get(options);
+
+      // Ensure it can be read out.
+      req.once('response', function(res) {
+        var buffer = '';
+        res.on('data', function gotData(data) {
+          buffer += data;
+          if (buffer === expected) {
+            res.removeListener('data', gotData);
+            handler.close('/xfoo');
+            res.once('end', done);
+          }
+        });
+      });
+      req.end();
+
+      // Kick off the writes to the stream...
+      writeStream();
+    });
+
+
 
   });
 
