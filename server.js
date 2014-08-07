@@ -1,6 +1,8 @@
 var fs = require('fs');
 var temporary = require('temporary');
+
 var Promise = require('promise');
+var EventEmitter = require('events').EventEmitter;
 
 var stat = Promise.denodeify(fs.stat);
 
@@ -45,9 +47,12 @@ function readOffsetInto(file, startOffset, target) {
 
 function Server() {
   this.paths = {};
+  EventEmitter.call(this);
 }
 
 Server.prototype = {
+  __proto__: EventEmitter.prototype,
+
   /**
   Handler callback for managing requests.
   */
@@ -77,6 +82,7 @@ Server.prototype = {
   },
 
   close: function(servePath) {
+    this.emit('close ' + servePath);
   },
 
   /**
@@ -95,32 +101,39 @@ Server.prototype = {
     var currentRead = readOffsetInto(detail.source, startOffset, res);
     var readPending = false;
 
-    // Initialize the file watcher...
-    var watcher = fs.watch(detail.source, { persistent: false }, function() {
+    function issueRead() {
       // If we are waiting for a read anyway do not issue another one.
-      if (readPending) return;
+      if (readPending) return currentRead;
 
       // Mark the internal state as waiting for a read so we do not queue many
       // extra `readOffsetInto` requests.
       readPending = true;
 
-      currentRead = currentRead.then(function(offset) {
+      return currentRead = currentRead.then(function(offset) {
         // Update the internal state allowing another read to be queued with the
         // next offset.
         readPending = false;
         startOffset = offset;
         return readOffsetInto(detail.source, startOffset, res);
       });
+    }
+
+    // Initialize the file watcher...
+    var watcher = fs.watch(detail.source, { persistent: false }, issueRead);
+
+    // We rely on the sender of "close" to know when the file has finished
+    // writing we issue one last read/write to ensure we don't miss anything.
+    this.once('close ' + detail.path, function() {
+      // Ensure we no longer watch for events...
+      watcher.close();
+
+      // Ensure we read any final data that we where waiting on...
+      issueRead().then(function() {
+        res.end();
+      });
     });
   },
 
-  /**
-  Close the stream and delete the file cache.
-  */
-  closeStream: function(path) {
-    var details = this.paths[path];
-    if (!details) return;
-  }
 };
 
 module.exports = Server;

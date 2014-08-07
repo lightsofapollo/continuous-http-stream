@@ -62,7 +62,8 @@ suite('server', function() {
           var two = JSON.stringify(expected.toString())
           if (buffer === expected) {
             res.removeListener('data', gotData);
-            done();
+            handler.close('/xfoo');
+            res.once('end', done);
           }
         });
       }).end();
@@ -88,7 +89,8 @@ suite('server', function() {
           buffer += data;
           if (buffer === expected) {
             res.removeListener('data', gotData);
-            done();
+            handler.close('/xfoo');
+            res.once('end', done);
           }
         });
       }).end();
