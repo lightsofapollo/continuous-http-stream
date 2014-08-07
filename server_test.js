@@ -1,7 +1,24 @@
 suite('server', function() {
   var Handler = require('./server');
   var PassThrough = require('stream').PassThrough;
+
+  var fs = require('fs');
   var http = require('http');
+  var fixture = 'test/stream.txt';
+
+  function cleanup() {
+    if (fs.existsSync(fixture)) {
+      fs.unlinkSync(fixture);
+    }
+  }
+
+  function createWriteStream() {
+    return fs.createWriteStream(fixture);
+  }
+
+  // Ensure we are always in a clean state.
+  setup(cleanup);
+  teardown(cleanup);
 
   suite('bursts', function() {
     var handler, server, url;
@@ -14,7 +31,7 @@ suite('server', function() {
 
     test('many', function(done) {
       // Create a stream endpoint...
-      var stream = new PassThrough();
+      var stream = createWriteStream();
       var chunks = [
         'abc1✔ ',
         'abc2✔ ',
@@ -24,10 +41,10 @@ suite('server', function() {
         'abc6✔ ',
         'abc7✔ ',
         'abc8✔✔✔✔'
-      ]
-      var expected = chunks.join('');
+      ];
 
-      handler.addStream('/xfoo', stream);
+      var expected = chunks.join('');
+      handler.add('/xfoo', fixture);
 
       function writeStream() {
         var chunk = chunks.shift();
@@ -56,9 +73,9 @@ suite('server', function() {
 
     test('single', function(done) {
       // Create a stream endpoint...
-      var stream = new PassThrough();
+      var stream = createWriteStream();
       var expected = 'foobar\nbaz';
-      handler.addStream('/xfoo', stream);
+      handler.add('/xfoo', fixture);
 
       // Write some data to the stream...
       stream.write(expected);

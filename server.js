@@ -69,15 +69,14 @@ Server.prototype = {
   the progress of the stream so multiple clients can connect and read from the
   beginning.
   */
-  addStream: function(path, stream) {
-    var filePath = (new temporary.File()).path;
-    var sink = fs.createWriteStream(filePath);
-    stream.pipe(sink);
-    this.paths[path] = {
-      file: filePath,
-      input: stream,
-      sink: sink
+  add: function(servePath, fileName) {
+    this.paths[servePath] = {
+      path: servePath,
+      source: fileName
     };
+  },
+
+  close: function(servePath) {
   },
 
   /**
@@ -93,11 +92,11 @@ Server.prototype = {
     var startOffset = 0; // current starting offset.
 
     // At most we can have a single read queued.
-    var currentRead = readOffsetInto(detail.file, startOffset, res);
+    var currentRead = readOffsetInto(detail.source, startOffset, res);
     var readPending = false;
 
     // Initialize the file watcher...
-    var watcher = fs.watch(detail.file, { persistent: false }, function() {
+    var watcher = fs.watch(detail.source, { persistent: false }, function() {
       // If we are waiting for a read anyway do not issue another one.
       if (readPending) return;
 
@@ -110,7 +109,7 @@ Server.prototype = {
         // next offset.
         readPending = false;
         startOffset = offset;
-        return readOffsetInto(detail.file, startOffset, res);
+        return readOffsetInto(detail.source, startOffset, res);
       });
     });
   },
