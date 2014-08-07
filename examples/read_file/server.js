@@ -57,7 +57,7 @@ function write() {
 
   console.log('write!!');
   if (stream.write(content)) {
-    setTimeout(write, 10);
+    setTimeout(write, 750);
   } else {
     console.log('wait for drain');
     stream.once('drain', function() {
