@@ -15,11 +15,12 @@ file.
 
 @param {String} file to read.
 @param {Number} startOffset where to start reading from.
+@param {null|Number} maxOffset to read to when null read until end.
 @param {WritableStream} target stream to write to.
 
 @return {Number} Current ending offset + 1.
 */
-function readOffsetInto(file, startOffset, target) {
+function readOffsetInto(file, startOffset, maxOffset, target) {
   return stat(file).then(function(stats) {
     return stats.size;
   }).then(function(endOffset) {
@@ -27,6 +28,9 @@ function readOffsetInto(file, startOffset, target) {
     return new Promise(function(accept) {
       // Don't read bytes that obviously cannot exist.
       if (startOffset > endOffset) return accept(startOffset);
+      if (maxOffset !== null && maxOffset > endOffset) {
+        endOffset = maxOffset;
+      }
 
       var reader = fs.createReadStream(file, {
         autoClose: true,
@@ -96,9 +100,12 @@ Server.prototype = {
 
     // Request wide state.
     var startOffset = 0; // current starting offset.
+    var maxOffset = null;
 
     // At most we can have a single read queued.
-    var currentRead = readOffsetInto(detail.source, startOffset, res);
+    var currentRead =
+      readOffsetInto(detail.source, startOffset, maxOffset, res);
+
     var readPending = false;
 
     function issueRead() {
@@ -114,7 +121,7 @@ Server.prototype = {
         // next offset.
         readPending = false;
         startOffset = offset;
-        return readOffsetInto(detail.source, startOffset, res);
+        return readOffsetInto(detail.source, startOffset, maxOffset, res);
       });
     }
 
