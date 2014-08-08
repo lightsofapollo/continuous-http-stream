@@ -1,5 +1,6 @@
 var fs = require('fs');
 var temporary = require('temporary');
+var debug = require('debug')('continuous-http');
 
 var Promise = require('promise');
 var EventEmitter = require('events').EventEmitter;
@@ -27,11 +28,13 @@ function readOffsetInto(file, startOffset, maxOffset, target) {
   }).then(function(endOffset) {
     // Current position in the overall stream/file...
     return new Promise(function(accept) {
+      debug('Begin read', startOffset, endOffset);
       if (maxOffset !== null && maxOffset <= endOffset) {
         endOffset = maxOffset;
       }
       // Don't read bytes that obviously cannot exist.
       if (startOffset > endOffset) return accept(startOffset);
+      debug('Issue read', startOffset, endOffset);
       var reader = fs.createReadStream(file, {
         autoClose: true,
         start: startOffset,
@@ -41,6 +44,7 @@ function readOffsetInto(file, startOffset, maxOffset, target) {
       // This must not actually end the stream...
       reader.pipe(target, { end: false });
       reader.once('end', function() {
+        debug('End');
         // Increment the endOffset so the next read will start at the next
         // offset.
         accept(endOffset + 1);
@@ -117,15 +121,19 @@ Server.prototype = {
   GET request.
   */
   serve: function(req, res) {
+    debug('serve', req.url);
     var detail = this.paths[req.url];
     var offsets = this.resolveOffsets(req.headers);
 
     // If we cannot resolve offsets reply with a format error.
     if (!offsets) {
+      debug('serve error');
       res.writeHeader(400);
       return res.end('Invalid range headers.');
     }
 
+    debug('reading %s %s-%s', req.url, offsets.startOffset, offsets.endOffset);
+    res.setHeader('Content-Type', 'text/plain; charset=UTF-8');
     // At this point the request should resolve...
     res.writeHeader(200);
 
@@ -140,6 +148,7 @@ Server.prototype = {
     var readPending = false;
 
     function issueRead() {
+      console.log('ISSUE READ', readPending, startOffset, maxOffset);
       // If we are waiting for a read anyway do not issue another one.
       if (readPending) return currentRead;
 
@@ -157,16 +166,21 @@ Server.prototype = {
     }
 
     // Initialize the file watcher...
-    var watcher = fs.watch(detail.source, { persistent: false }, issueRead);
+    var watcher = fs.watchFile(detail.source, { persistent: false }, function(e) {
+      debug('file change', e);
+      issueRead();
+    });
 
     // We rely on the sender of "close" to know when the file has finished
     // writing we issue one last read/write to ensure we don't miss anything.
     this.once('close ' + detail.path, function() {
+      debug('close', detail.path);
       // Ensure we no longer watch for events...
       watcher.close();
 
       // Ensure we read any final data that we where waiting on...
       issueRead().then(function() {
+        debug('res end', detail.path);
         res.end();
       });
     });
