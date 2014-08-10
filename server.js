@@ -1,12 +1,31 @@
 var fs = require('fs');
 var temporary = require('temporary');
 var debug = require('debug')('continuous-http');
+var rangeParser = require('http-range-parse');
+var streamSlice = require('stream-slice');
 
 var Promise = require('promise');
 var EventEmitter = require('events').EventEmitter;
+var WritableStream = require('stream').Writable;
+var QueuedStream = require('queued-stream');
 
 var stat = Promise.denodeify(fs.stat);
-var rangeParser = require('http-range-parse');
+
+function decorateWrite(stream) {
+  var write = stream.write;
+  stream.write = function(data, encoding, callback) {
+    if (typeof encoding === 'function') {
+      callback = encoding;
+      encoding = null;
+    }
+
+    return write.call(stream, data, encoding, function() {
+      stream.emit('write', stream);
+      callback && callback.apply(stream, arguments);
+    })
+  };
+  return stream;
+}
 
 /**
 Write the contents of a given file to the target stream staring at
@@ -23,32 +42,27 @@ file.
 @return {Number} Current ending offset + 1.
 */
 function readOffsetInto(file, startOffset, maxOffset, target) {
-  return stat(file).then(function(stats) {
-    return stats.size;
-  }).then(function(endOffset) {
-    // Current position in the overall stream/file...
-    return new Promise(function(accept) {
-      debug('Begin read', startOffset, endOffset);
-      if (maxOffset !== null && maxOffset <= endOffset) {
-        endOffset = maxOffset;
-      }
-      // Don't read bytes that obviously cannot exist.
-      if (startOffset > endOffset) return accept(startOffset);
-      debug('Issue read', startOffset, endOffset);
-      var reader = fs.createReadStream(file, {
-        autoClose: true,
-        start: startOffset,
-        end: endOffset
-      });
+  // Current position in the overall stream/file...
+  return new Promise(function(accept) {
+    var options = { autoClose: true, start: startOffset };
+    // Intentional use of != for null/undefined.
+    if (maxOffset != undefined) {
+      options.end = maxOffset;
+    }
 
-      // This must not actually end the stream...
-      reader.pipe(target, { end: false });
-      reader.once('end', function() {
-        debug('End');
-        // Increment the endOffset so the next read will start at the next
-        // offset.
-        accept(endOffset + 1);
-      });
+    var reader = fs.createReadStream(file, options);
+    // This must not actually end the stream...
+    reader.pipe(target, { end: false });
+    var bytesRead = 0;
+    function countBytes(buffer) {
+      bytesRead += buffer.length;
+    }
+
+    reader.on('data', countBytes);
+    reader.once('end', function() {
+      var read = startOffset + bytesRead;
+      reader.removeListener('data', countBytes);
+      accept(read);
     });
   });
 }
@@ -62,7 +76,7 @@ Server.prototype = {
   __proto__: EventEmitter.prototype,
 
   /**
-  Handler callback for managing requests.
+  Return the handler for public operations (getting streams).
   */
   callback: function() {
     return function(req, res) {
@@ -77,20 +91,19 @@ Server.prototype = {
     }.bind(this);
   },
 
-  /**
-  Register a stream to serve over the server. A temporary file is used to store
-  the progress of the stream so multiple clients can connect and read from the
-  beginning.
-  */
-  add: function(servePath, fileName) {
-    this.paths[servePath] = {
-      path: servePath,
-      source: fileName
-    };
-  },
+  register: function(path, headers, stream) {
+    var cachePath = (new temporary.File()).path;
+    var cacheStream = fs.createWriteStream(cachePath);
 
-  close: function(servePath) {
-    this.emit('close ' + servePath);
+    var detail = this.paths[path] = {
+      path: path, // Public path.
+      headers: headers || {}, // Header data.
+      stream: stream, // Incoming data.
+      streamOffset: 0, // Current number of bytes read of data.
+      cachePath: cachePath, // Location of the file system cache.
+      cacheStream: cacheStream // Writable cache stream for tracking.
+    };
+    stream.pipe(decorateWrite(cacheStream));
   },
 
   /**
@@ -102,7 +115,7 @@ Server.prototype = {
   resolveOffsets: function(headers) {
     if (!headers.range) {
       // Start at the first byte continue until the last byte.
-      return { startOffset: 0, endOffset: null }
+      return { start: 0, end: null }
     }
 
     var parsedRange = rangeParser(headers.range);
@@ -111,8 +124,8 @@ Server.prototype = {
     }
 
     return {
-      startOffset: parsedRange.first || 0,
-      endOffset: parsedRange.suffix || parsedRange.last || null
+      start: parsedRange.first || 0,
+      end: parsedRange.suffix || parsedRange.last || null
     };
   },
 
@@ -121,7 +134,6 @@ Server.prototype = {
   GET request.
   */
   serve: function(req, res) {
-    debug('serve', req.url);
     var detail = this.paths[req.url];
     var offsets = this.resolveOffsets(req.headers);
 
@@ -132,55 +144,66 @@ Server.prototype = {
       return res.end('Invalid range headers.');
     }
 
-    debug('reading %s %s-%s', req.url, offsets.startOffset, offsets.endOffset);
-    res.setHeader('Content-Type', 'text/plain; charset=UTF-8');
-    // At this point the request should resolve...
+    // The request should be successful at this point so write headers.
+    for (var header in detail.headers) {
+      console.log(header, detail.headers[header]);
+      res.setHeader(header, detail.headers[header]);
+    }
     res.writeHeader(200);
 
-    // Request wide state.
-    var startOffset = offsets.startOffset; // current starting offset.
-    var maxOffset = offsets.endOffset;
+    var queue = {
+      start: offsets.start,
+      end: offsets.end,
+      reading: false,
 
-    // At most we can have a single read queued.
-    var currentRead =
-      readOffsetInto(detail.source, startOffset, maxOffset, res);
+      _read: function() {
+        return readOffsetInto(detail.cachePath, this.start, this.end, res);
+      },
 
-    var readPending = false;
+      read: function() {
+        // At the end of each read call we verify that we really cannot read any
+        // more bytes before marking this false again.
+        if (this.reading) return Promise.resolve();
 
-    function issueRead() {
-      console.log('ISSUE READ', readPending, startOffset, maxOffset);
-      // If we are waiting for a read anyway do not issue another one.
-      if (readPending) return currentRead;
+        this.reading = true;
+        return this._read().then(function(newOffset) {
+          // Done reading...
+          this.reading = false;
 
-      // Mark the internal state as waiting for a read so we do not queue many
-      // extra `readOffsetInto` requests.
-      readPending = true;
+          // Ensure we don't queue extra reads if byte range fetching...
+          if (this.end !== null && newOffset >= this.end) {
+            return;
+          }
 
-      return currentRead = currentRead.then(function(offset) {
-        // Update the internal state allowing another read to be queued with the
-        // next offset.
-        readPending = false;
-        startOffset = offset;
-        return readOffsetInto(detail.source, startOffset, maxOffset, res);
-      });
-    }
+          // Mark our progress...
+          this.start = newOffset;
+          // If we can actually read more continue...
+          setTimeout(function() {
+            console.log('read', this.start, this.end, detail.cacheStream.bytesWritten);
+          }.bind(this), 750);
+          if (this.start < detail.cacheStream.bytesWritten) {
+            // Begin reading again...
+            return this.read();
+          }
+        }.bind(this));
+      }
+    };
 
-    // Initialize the file watcher...
-    var watcher = fs.watchFile(detail.source, { persistent: false }, function(e) {
-      debug('file change', e);
-      issueRead();
+    var read = queue.read.bind(queue);
+    read();
+    detail.cacheStream.on('write', function() {
+      read();
     });
 
-    // We rely on the sender of "close" to know when the file has finished
-    // writing we issue one last read/write to ensure we don't miss anything.
-    this.once('close ' + detail.path, function() {
-      debug('close', detail.path);
+    // The stream will eventually trigger the cache stream to be completely
+    // written which triggers the finalization of this request.
+    detail.cacheStream.on('finish', function() {
+      debug('got finish issue final reads...', req.url);
       // Ensure we no longer watch for events...
-      watcher.close();
-
+      detail.stream.removeListener('data', read);
       // Ensure we read any final data that we where waiting on...
-      issueRead().then(function() {
-        debug('res end', detail.path);
+      queue.read().then(function() {
+        debug('completed request for %s', req.url);
         res.end();
       });
     });

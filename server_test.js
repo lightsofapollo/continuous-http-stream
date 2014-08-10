@@ -5,21 +5,6 @@ suite('server', function() {
 
   var fs = require('fs');
   var http = require('http');
-  var fixture = 'test/stream.txt';
-
-  function cleanup() {
-    if (fs.existsSync(fixture)) {
-      fs.unlinkSync(fixture);
-    }
-  }
-
-  function createWriteStream() {
-    return fs.createWriteStream(fixture);
-  }
-
-  // Ensure we are always in a clean state.
-  setup(cleanup);
-  teardown(cleanup);
 
   suite('bursts', function() {
     var handler, server, url;
@@ -32,7 +17,7 @@ suite('server', function() {
 
     test('many', function(done) {
       // Create a stream endpoint...
-      var stream = createWriteStream();
+      var stream = new PassThrough();
       var chunks = [
         'abc1✔ ',
         'abc2✔ ',
@@ -45,12 +30,12 @@ suite('server', function() {
       ];
 
       var expected = chunks.join('');
-      handler.add('/xfoo', fixture);
+      handler.register('/xfoo', {}, stream);
 
       function writeStream() {
         var chunk = chunks.shift();
         if (!chunk) return;
-        stream.write(chunk);
+        var x = stream.write(chunk);
         process.nextTick(writeStream);
       }
 
@@ -59,9 +44,10 @@ suite('server', function() {
         var buffer = '';
         res.on('data', function gotData(data) {
           buffer += data;
+          console.log(buffer);
           if (buffer === expected) {
             res.removeListener('data', gotData);
-            handler.close('/xfoo');
+            stream.end();
             res.once('end', done);
           }
         });
@@ -73,9 +59,9 @@ suite('server', function() {
 
     test('single', function(done) {
       // Create a stream endpoint...
-      var stream = createWriteStream();
+      var stream = new PassThrough();
       var expected = 'foobar\nbaz';
-      handler.add('/xfoo', fixture);
+      handler.register('/xfoo', {}, stream);
 
       // Write some data to the stream...
       stream.write(expected);
@@ -88,7 +74,7 @@ suite('server', function() {
           buffer += data;
           if (buffer === expected) {
             res.removeListener('data', gotData);
-            handler.close('/xfoo');
+            stream.end();
             res.once('end', done);
           }
         });
@@ -97,7 +83,7 @@ suite('server', function() {
 
     test('range: between', function(done) {
       // Create a stream endpoint...
-      var stream = createWriteStream();
+      var stream = new PassThrough();
       var chunks = [
         '1 ',
         '2 ',
@@ -120,7 +106,7 @@ suite('server', function() {
         '8',
       ].join('')
 
-      handler.add('/xfoo', fixture);
+      handler.register('/xfoo', {}, stream);
 
       function writeStream() {
         var chunk = chunks.shift();
@@ -144,9 +130,10 @@ suite('server', function() {
         var buffer = '';
         res.on('data', function gotData(data) {
           buffer += data;
+          console.log(buffer);
           if (buffer === expected) {
             res.removeListener('data', gotData);
-            handler.close('/xfoo');
+            stream.end();
             res.once('end', done);
           }
         });
@@ -159,7 +146,7 @@ suite('server', function() {
 
     test('range: start no end', function(done) {
       // Create a stream endpoint...
-      var stream = createWriteStream();
+      var stream = new PassThrough();
       var chunks = [
         '1 ',
         '2 ',
@@ -183,7 +170,7 @@ suite('server', function() {
         '9 ',
       ].join('')
 
-      handler.add('/xfoo', fixture);
+      handler.register('/xfoo', {}, stream);
 
       function writeStream() {
         var chunk = chunks.shift();
@@ -209,7 +196,7 @@ suite('server', function() {
           buffer += data;
           if (buffer === expected) {
             res.removeListener('data', gotData);
-            handler.close('/xfoo');
+            stream.end();
             res.once('end', done);
           }
         });
@@ -222,7 +209,7 @@ suite('server', function() {
 
     test('range: end no start', function(done) {
       // Create a stream endpoint...
-      var stream = createWriteStream();
+      var stream = new PassThrough();
       var chunks = [
         '1 ',
         '2 ',
@@ -239,7 +226,7 @@ suite('server', function() {
         '1 '
       ].join('')
 
-      handler.add('/xfoo', fixture);
+      handler.register('/xfoo', {}, stream);
 
       function writeStream() {
         var chunk = chunks.shift();
@@ -265,7 +252,7 @@ suite('server', function() {
           buffer += data;
           if (buffer === expected) {
             res.removeListener('data', gotData);
-            handler.close('/xfoo');
+            stream.end();
             res.once('end', done);
           }
         });
@@ -275,8 +262,6 @@ suite('server', function() {
       // Kick off the writes to the stream...
       writeStream();
     });
-
-
 
   });
 
