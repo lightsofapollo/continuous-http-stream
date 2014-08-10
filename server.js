@@ -2,12 +2,10 @@ var fs = require('fs');
 var temporary = require('temporary');
 var debug = require('debug')('continuous-http');
 var rangeParser = require('http-range-parse');
-var streamSlice = require('stream-slice');
 
 var Promise = require('promise');
 var EventEmitter = require('events').EventEmitter;
 var WritableStream = require('stream').Writable;
-var QueuedStream = require('queued-stream');
 
 var stat = Promise.denodeify(fs.stat);
 
