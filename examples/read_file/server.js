@@ -1,3 +1,6 @@
+var startMem = process.memoryUsage();
+
+var bytes = require('bytes');
 var http = require('http');
 var fs = require('fs');
 
@@ -10,9 +13,19 @@ if (fs.existsSync(file)) fs.unlinkSync(file);
 
 var stream = new PassThrough();
 var chunk = 0;
+
+setInterval(function() {
+  var usage = process.memoryUsage();
+  console.log('usage: ', {
+    rss: bytes(usage.rss - startMem.rss),
+    heapTotal: bytes(usage.heapTotal - startMem.heapTotal),
+    heapUsed: bytes(usage.heapUsed - startMem.heapUsed),
+  });
+}, 1000);
+
 setInterval(function() {
   stream.write('#### CHUNK ' + (chunk++) + ' ####');
-}, 750);
+}, 200);
 
 var server = http.createServer(handler.callback());
 handler.register('/file', { 'content-type': 'text/plain; charset=UTF-8' }, stream);

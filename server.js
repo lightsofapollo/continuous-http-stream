@@ -91,7 +91,7 @@ Server.prototype = {
 
   register: function(path, headers, stream) {
     var cachePath = (new temporary.File()).path;
-    var cacheStream = fs.createWriteStream(cachePath);
+    var cacheStream = fs.createWriteStream(cachePath, { flags: 'a' });
 
     var detail = this.paths[path] = {
       path: path, // Public path.
@@ -144,7 +144,6 @@ Server.prototype = {
 
     // The request should be successful at this point so write headers.
     for (var header in detail.headers) {
-      console.log(header, detail.headers[header]);
       res.setHeader(header, detail.headers[header]);
     }
     res.writeHeader(200);
@@ -176,9 +175,6 @@ Server.prototype = {
           // Mark our progress...
           this.start = newOffset;
           // If we can actually read more continue...
-          setTimeout(function() {
-            console.log('read', this.start, this.end, detail.cacheStream.bytesWritten);
-          }.bind(this), 750);
           if (this.start < detail.cacheStream.bytesWritten) {
             // Begin reading again...
             return this.read();
